@@ -21,7 +21,7 @@ class YTAPIHandler:
             maxResults=max_results).execute()
 
         for i in response.get('items'):
-            yield self._video_pattern + i['id']['videoId'], i['snippet']['title']  # url, info
+            yield self._video_pattern + i['id']['videoId'], i['snippet']['title'], i['snippet']['thumbnails']['default']['url']  # url, info
 
     def get_info(self, query: str) -> tuple[str, str]:
         return next(self.get_infos(query))

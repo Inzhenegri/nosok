@@ -69,3 +69,10 @@ class NoTracksSpecified(commands.CommandError):
     Occurs, when a user didn't specify any suggested tracks.
     """
     pass
+
+
+class HandlerNotSpecified(commands.CommandError):
+    """
+    Occurs, when a user didn't specify one of the handlers, whether it's Spotify, YouTube DL or YouTube API.
+    """
+    pass

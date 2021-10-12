@@ -2,7 +2,6 @@ import asyncio
 import re
 import typing
 from collections import defaultdict
-from enum import IntEnum
 
 import discord
 from discord.embeds import Embed
@@ -10,10 +9,12 @@ from discord.ext import commands
 from discord_components.interaction import InteractionType
 
 import exceptions
+from handlers import YDLHandler, YTAPIHandler
 import utils
-from base import BASE_COLOR, ERROR_COLOR
-from core import yt_handler as _yt, bot
-from utils import is_connected, send_embed, get_components
+from base import API_KEY, BASE_COLOR, ERROR_COLOR, HANDLERS_DATA, Handler
+from core import bot
+from utils import get_handlers_components, get_track_components, is_connected, send_embed
+
 
 URL_REGEX = r"(?i)\b((?:https?://|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s(" \
             r")<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
@@ -78,6 +79,13 @@ class Queue:
 class Music(commands.Cog):
     def __init__(self):
         self._queues: defaultdict[Queue] = defaultdict(Queue)
+        self.handler = None
+        self.preferred_handler = Handler.YDL
+        self._yt = YDLHandler({
+            'simulate': True,
+            'quiet': True,
+            'format': 'bestaudio/best'
+        }) if self.preferred_handler == Handler.YDL else YTAPIHandler(API_KEY)
 
     @commands.command(aliases=['j'])
     async def join(self, ctx: commands.Context, voice_channel: discord.VoiceChannel = None) -> None:
@@ -110,7 +118,7 @@ class Music(commands.Cog):
     @commands.check(is_connected)
     async def stop(self, ctx: commands.Context) -> None:
         """
-        Stops bot from playing current song.
+        Stops bot from playing the current song.
         """
         q: Queue = self._queues[ctx.guild.id]
         q.play_next = False
@@ -188,7 +196,7 @@ class Music(commands.Cog):
 
             ctx.guild.voice_client.stop()
 
-            stream = _yt.get_stream(q.current[0])
+            stream = self._yt.get_stream(q.current[0])
             loop = bot.loop
             await self._play(ctx, stream, loop)
         else:
@@ -199,7 +207,7 @@ class Music(commands.Cog):
             )
             raise exceptions.QueueEmpty
 
-    async def get_pagination(self, ctx: commands.Context, *tracks):
+    async def _get_tracks_pagination(self, ctx: commands.Context, *tracks):
         embeds = []
         tracks = tracks[0]
 
@@ -211,9 +219,8 @@ class Music(commands.Cog):
 
         current = 0
         message = await ctx.reply(
-            '**Pagination**',
             embed=embeds[current],
-            components=get_components(embeds, current)
+            components=get_track_components(embeds, current)
         )
 
         while True:
@@ -240,7 +247,53 @@ class Music(commands.Cog):
                 await interaction.respond(
                     type=InteractionType.UpdateMessage,
                     embed=embeds[current],
-                    components=get_components(embeds, current)
+                    components=get_track_components(embeds, current)
+                )
+            except asyncio.TimeoutError:
+                await message.delete()
+                break
+
+    async def _get_handlers_pagination(self, ctx: commands.Context, handlers):
+        embeds = []
+
+        for handler in HANDLERS_DATA:
+            title = handler.get('title')
+            description = handler.get('description')
+            embed = Embed(title=title, description=description, color=BASE_COLOR)
+            embed.add_field(name='Called by', value=ctx.author.mention)
+            embeds.append(embed)
+
+        current = 0
+        message = await ctx.send(
+            embed=embeds[current],
+            components=get_handlers_components(embeds, current)
+        )
+
+        while True:
+            try:
+                interaction = await bot.wait_for(
+                    'button_click',
+                    check=lambda i: i.component.id in ['back', 'front', 'preferred_handler'],
+                    timeout=10.0
+                )
+                if interaction.component.id == 'back':
+                    current -= 1
+                elif interaction.component.id == 'front':
+                    current += 1
+                elif interaction.component.id == 'preferred_handler':
+                    if (handler := handlers[current]) is not None:
+                        await message.delete()
+                        return handler
+
+                if current == len(embeds):
+                    current = 0
+                elif current < 0:
+                    current = len(embeds) - 1
+
+                await interaction.respond(
+                    type=InteractionType.UpdateMessage,
+                    embed=embeds[current],
+                    components=get_handlers_components(embeds, current)
                 )
             except asyncio.TimeoutError:
                 await message.delete()
@@ -249,7 +302,7 @@ class Music(commands.Cog):
     @commands.command(aliases=['p'])
     async def play(self, ctx: commands.Context, *query) -> None:
         """
-        Plays current song.
+        Plays the current song.
         """
         query = ' '.join(query)
         voice = ctx.voice_client
@@ -278,11 +331,11 @@ class Music(commands.Cog):
                 await self.queue(ctx, query)
                 return
 
-            url, title = _yt.get_info(query)
+            url, title = self._yt.get_info(query)
 
             q.add(url, title, ctx.author.mention)
             q.now_playing = len(q) - 1
-            stream = _yt.get_stream(url)
+            stream = self._yt.get_stream(url)
             loop = bot.loop
             await self._play(ctx, stream, loop)
         else:
@@ -307,7 +360,7 @@ class Music(commands.Cog):
                 )
                 raise exceptions.QueueEmpty
 
-            stream = _yt.get_stream(res[0])
+            stream = self._yt.get_stream(res[0])
             loop = bot.loop
             await self._play(ctx, stream, loop)
 
@@ -329,21 +382,24 @@ class Music(commands.Cog):
 
     async def _get_track(self, ctx: commands.Context, query: str) -> tuple:
         if re.match(URL_REGEX, query):
-            song = _yt.get_info(query)
+            song = self._yt.get_info(query)
         else:
-            tracks = list(await utils.run_blocking(_yt.get_infos, bot, query=query))
+            tracks = list(await utils.run_blocking(self._yt.get_infos, bot, query=query))
             song = await self._choose_track(ctx, tracks)
 
         return song
 
     async def _choose_track(self, ctx: commands.Context, tracks):
-        track = await self.get_pagination(ctx, tracks)
+        track = await self._get_tracks_pagination(ctx, tracks)
 
         if not track:
             return
 
         url, title, _ = track
         return url, title
+
+    async def _choose_handler(self, ctx: commands.Context, handlers):
+        return handler if (handler := await self._get_handlers_pagination(ctx, handlers)) is not None else None
 
     async def send_no_tracks_specified(self, ctx: commands.Context):
         await send_embed(description='No tracks were specified', color=BASE_COLOR, ctx=ctx)
@@ -501,7 +557,7 @@ class Music(commands.Cog):
 
         voice = ctx.voice_client
 
-        tracks = list(await utils.run_blocking(_yt.get_infos, bot, query=query))
+        tracks = list(await utils.run_blocking(self._yt.get_infos, bot, query=query))
         track = await self._choose_track(ctx, tracks)
 
         if not track:
@@ -511,7 +567,7 @@ class Music(commands.Cog):
 
         q.add(url, title, ctx.author.mention)
         if not voice.is_playing():
-            stream = _yt.get_stream(url)
+            stream = self._yt.get_stream(url)
             loop = bot.loop
             await self._play(ctx, stream, loop)
         else:
@@ -520,3 +576,19 @@ class Music(commands.Cog):
                 description=f'Queued: [{title}]({url})',
                 color=BASE_COLOR
             )
+
+    @commands.command(aliases=['sh'])
+    async def set_handler(self, ctx: commands.Context):
+        handlers = [h.value for h in Handler]
+        self.handler = await self._choose_handler(ctx, handlers)
+
+        if self.handler == Handler.YTAPI.value:
+            self._yt = YTAPIHandler(API_KEY)
+        else:
+            self._yt = YDLHandler({
+                'simulate': True,
+                'quiet': True,
+                'format': 'bestaudio/best'
+            })
+
+        await ctx.send(f"The handler has been set to **{HANDLERS_DATA[self.handler].get('title')}**")
