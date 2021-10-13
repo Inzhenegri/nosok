@@ -14,7 +14,8 @@ async def send_embed(description: str, color: discord.Colour, ctx: commands.Cont
         description=description,
         color=color
     )
-    await ctx.send(embed=embed)
+    message = await ctx.send(embed=embed)
+    return message
 
 
 async def is_connected(ctx: commands.Context):
@@ -34,7 +35,7 @@ async def run_blocking(blocking_func: typing.Callable, bot: commands.Bot, *args,
     return await bot.loop.run_in_executor(None, func)
 
 
-def get_components(embeds, current):
+def get_track_components(embeds, current):
     return [
         [
             Button(label='Prev', id='back', style=ButtonStyle.red),
@@ -54,6 +55,32 @@ def get_components(embeds, current):
             Button(
                 label='That one',
                 id='preferred_track',
+                style=ButtonStyle.green
+            )
+        ]
+    ]
+
+
+def get_handlers_components(embeds, current):
+    return [
+        [
+            Button(label='Prev', id='back', style=ButtonStyle.red),
+            Button(
+                label=f'Page {int(embeds.index(embeds[current])) + 1}/{len(embeds)}',
+                id='cur',
+                style=ButtonStyle.grey,
+                disabled=True
+            ),
+            Button(
+                label='Next',
+                id='front',
+                style=ButtonStyle.red
+            )
+        ],
+        [
+            Button(
+                label='I want this one',
+                id='preferred_handler',
                 style=ButtonStyle.green
             )
         ]

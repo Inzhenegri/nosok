@@ -29,11 +29,6 @@ else:
 
     std_headers['Aser-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ' \
                                 'Chrome/51.0.2704.103 Safari/537.36'
-    yt_handler = YDLHandler({
-        'simulate': True,
-        'quiet': True,
-        'format': 'bestaudio/best'
-    })
 
 
 def get_prefix(_, msg: discord.Message) -> str:
